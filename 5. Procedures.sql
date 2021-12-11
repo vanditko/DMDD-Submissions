@@ -448,6 +448,134 @@ EXECUTE mark_as_consulting_patient(APPOINTMENT_ID_SEQ.CURRVAL);
 EXECUTE mark_as_consulting_patient (10000010);
 
 /
+
+-- Trigger while admitting patient, the room will be marked occupied
+
+-- Admit Patient
+CREATE OR REPLACE PROCEDURE admit_patient(
+    appt_id NUMBER
+    )
+IS
+    r_in_pat IN_PATIENT%ROWTYPE;
+    already_exist_count NUMBER;
+    PATIENT_ALREADY_MARKED EXCEPTION;
+    PATIENT_ALREADY_ADMITTED EXCEPTION;
+BEGIN
+
+    DBMS_OUTPUT.PUT_LINE('--------------------------------------------ADMITTING PATIENT--------------------------------------------');
+    
+    SELECT room_id into r_in_pat.room_id  FROM room WHERE room_status = 'Vacant' AND rownum < 2;
+    
+    SELECT patient_id, appointment_date INTO r_in_pat.in_patient_id, r_in_pat.admit_date FROM APPOINTMENT WHERE appointment_id = appt_id AND appointment_status = 'Completed';
+    
+    BEGIN
+    
+        SELECT count(1) INTO already_exist_count 
+        FROM OUT_PATIENT, APPOINTMENT 
+        WHERE appointment_id = appt_id
+        AND out_patient.out_patient_id = appointment.patient_id
+        AND out_patient.last_consult_date = appointment.appointment_date;
+        
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            already_exist_count := 0;
+    END;
+    
+    IF already_exist_count > 0 THEN
+        RAISE PATIENT_ALREADY_MARKED;
+    END IF;
+    
+    BEGIN
+    
+        SELECT count(1) INTO already_exist_count 
+        FROM IN_PATIENT, APPOINTMENT 
+        WHERE appointment_id = appt_id
+        AND in_patient.in_patient_id = appointment.patient_id
+        AND in_patient.admit_date = appointment.appointment_date;
+        
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            already_exist_count := 0;
+    END;
+    
+    IF already_exist_count > 0 THEN
+        RAISE PATIENT_ALREADY_ADMITTED;
+    END IF;
+
+    INSERT INTO IN_PATIENT VALUES (r_in_pat.in_patient_id, r_in_pat.room_id, r_in_pat.admit_date, NULL);
+    DBMS_OUTPUT.PUT_LINE('Patient - ' || r_in_pat.in_patient_id || ' admitted in room - '|| r_in_pat.room_id || '  successfully');
+    COMMIT;
+    
+EXCEPTION
+     WHEN PATIENT_ALREADY_MARKED THEN
+        DBMS_OUTPUT.PUT_LINE('Patient - ' || r_in_pat.in_patient_id || ' marked as consulting patient cannot be admitted');
+    WHEN PATIENT_ALREADY_ADMITTED THEN
+        DBMS_OUTPUT.PUT_LINE('Patient - ' || r_in_pat.in_patient_id || ' is already admitted, please provide correct appointment id');
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('Either No Vacant Rooms or Appointment not found in the system');
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE(SQLERRM);
+END;
+/
+set SERVEROUTPUT ON;
+
+-- Wrong Appointment in the input
+EXECUTE ADMIT_PATIENT(123);
+
+-- Trying to admit consulting patient
+EXECUTE ADMIT_PATIENT(APPOINTMENT_ID_SEQ.CURRVAL);
+
+-- Trying to admit already admitted patient
+EXECUTE ADMIT_PATIENT(10000010);
+
+-- With correct Appointment
+EXECUTE ADD_DIAGNOSIS (10000003, 'Allergic rhinitis', 'Pain in the ear, Down syndrome');
+EXECUTE ADMIT_PATIENT(10000003);
+-- Take the room id and patient id from output
+select * from IN_PATIENT where in_patient_id = 1000249 ;
+select * from room where room_id = 1;
+
+/
+
+-- Trigger while admitting patient, the room will be marked occupied
+
+-- Discharge Patient
+CREATE OR REPLACE PROCEDURE discharge_patient(
+    patient_id NUMBER
+    )
+IS
+    temp_pat_id NUMBER(12);
+BEGIN
+
+    DBMS_OUTPUT.PUT_LINE('--------------------------------------------DISCHARGE PATIENT--------------------------------------------');
+    
+    SELECT in_patient_id into temp_pat_id FROM in_patient WHERE in_patient_id = patient_id AND discharge_date IS NULL;
+
+    UPDATE IN_PATIENT SET discharge_date = sysdate WHERE in_patient_id = patient_id AND discharge_date IS NULL;
+    DBMS_OUTPUT.PUT_LINE('Patient - ' || patient_id || ' discharged successfully');
+    generate_bill(patient_id,'I');
+    COMMIT;
+    
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('Patient - ' || patient_id || ' admission record not found ');
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE(SQLERRM);
+END;
+/
+
+set SERVEROUTPUT ON;
+
+-- Discharge patient with wrong patient id
+EXECUTE discharge_patient(123);
+
+-- Discharge patient with correct patient id
+EXECUTE discharge_patient(1000249);
+-- Take bill id, room id from output
+select * from billing where bill_id = 1000000317;
+select * from IN_PATIENT where in_patient_id = 1000249 ;
+select * from room where room_id = 1;
+/
  
 CREATE OR REPLACE FUNCTION calculate_billed_amount (
         billing_id NUMBER
